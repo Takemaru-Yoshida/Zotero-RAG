@@ -1,0 +1,18 @@
+# Core ML / embedding
+torch>=2.5.0
+sentence-transformers>=3.3.0
+transformers>=4.46.0
+huggingface-hub>=0.26.0
+
+# Vector search (efficient ANN)
+faiss-cpu>=1.9.0
+numpy>=1.26.0
+
+# PDF text extraction (fallback when Zotero fulltext cache is absent)
+pypdf>=5.1.0
+
+# GUI
+PyQt6>=6.7.0
+
+# HTTP client for Zotero local API
+requests>=2.32.0

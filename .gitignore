@@ -1,0 +1,58 @@
+# ===========================================================================
+# Zotero-RAG .gitignore
+#
+# 方針: 「人それぞれ異なるデータ」と「再生成できる生成物」はコミットしない。
+#   - 潜在ベクトル/インデックス/モデルは ~/Library/Application Support/Zotero-RAG/
+#     に保存されるため通常はリポジトリ外だが、ZOTERO_RAG_HOME をプロジェクト内に
+#     向けた場合に備えて下記で明示的に除外する。
+# ===========================================================================
+
+# --- 潜在ベクトル・インデックス・メタデータ（ユーザー固有データ／除外対象）---
+*.faiss
+index.faiss
+metadata.json
+# ユーザー固有設定（モデル名やパスを含む）。配布する場合は config.example.json を使う
+config.json
+
+# --- 埋め込みモデルのキャッシュ（巨大／HuggingFaceから再取得可能）---
+models/
+*.safetensors
+*.bin
+*.pt
+*.onnx
+.cache/
+
+# --- Python 仮想環境（再生成可能：python3 -m venv venv）---
+venv/
+.venv/
+env/
+
+# --- Python のキャッシュ・ビルド成果物 ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- macOS アプリバンドル（scripts/build_app.sh で再生成。絶対パスを含む）---
+Zotero-RAG.app/
+
+# --- アイコンの中間生成物（make_icon.py で icon.svg から再生成）---
+assets/icon.iconset/
+
+# --- Node.js（PptxGenJS 用。npm install で再生成可能）---
+docs/pptx/node_modules/
+
+# --- OS / エディタ ---
+.DS_Store
+.AppleDouble
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
