@@ -1,6 +1,30 @@
 # Zotero-RAG
 
-Semantic (vector) search over your Zotero library — English & 日本語.
+Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー・関連グラフ・
+**引用ファクトチェック**をひとつにしたデスクトップアプリ（PyQt6）— English & 日本語.
+すべてローカルで動作し、Zotero のデータベースは読み取り専用で扱います。
+
+## 機能 (Features)
+
+| 画面 | 内容 |
+|---|---|
+| ダッシュボード | 登録文献数・チェック済み引用数・要確認の引用数、最近の文献とファクトチェック履歴 |
+| ライブラリ | Zotero の文献 + アプリに直接追加した PDF。タイトル/著者/掲載誌・タグ・お気に入りで絞り込み |
+| 文献ビューア | 本文を一節ごとに表示。AI 重要文マーカー（緑）、「探したい文」の意味検索マーカー（黄）、関連文献 |
+| 意味検索 | ライブラリ全体から、質問と意味の近い**一節**を類似度順に表示（日英横断）。クリックで該当箇所へ |
+| 引用ファクトチェック | 原稿中の `(著者, 年)` / `著者 (年)` 引用を原文と照合し、支持 / 一部支持 / 矛盾 / 文献なし を根拠の一文つきで判定 |
+| 関連グラフ | 引用関係（本文中の参考文献から検出）と内容の類似（文献ベクトルの相互近傍）を可視化 |
+| 設定 | Zotero データフォルダ、検索の件数・しきい値、AI 機能の切り替え、システム情報 |
+
+- PDF の追加: 「＋ 文献を追加」またはウィンドウへのドラッグ&ドロップ。追加した PDF は
+  文献ビューアの「情報を編集」で著者・出版年などを入力できます（ファクトチェックの照合に使用）。
+- 使用モデル（いずれも無料・ローカル実行、初回のみ Hugging Face から自動ダウンロード）:
+  - 埋め込み: `intfloat/multilingual-e5-large`（約 2.1 GB）
+  - 引用ファクトチェックの含意判定: `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`
+    （約 560 MB。「チェックする」を初めて押したときにダウンロード）
+- ダウンロード後はネットワークなしで起動・検索できます。
+- 旧バージョン（v1）のインデックスは、初回起動時に自動で新形式（文単位の一節 + 本文保存）へ
+  再構築されます（101 文献で数分〜十数分）。
 
 ドキュメント / Documentation:
 - **[docs/設計書.md](docs/設計書.md)** — 日本語の設計説明書（アプリの仕組み・操作方法）
@@ -57,21 +81,40 @@ Command-line:
 venv/bin/python app.py --status
 venv/bin/python app.py --sync
 venv/bin/python app.py --search "contrastive self-supervised learning"
+venv/bin/python app.py --factcheck draft.txt   # 原稿ファイルの引用を照合
+```
+
+Tests:
+
+```bash
+venv/bin/pip install pytest
+venv/bin/python -m pytest tests -q
 ```
 
 ## Project layout
 
 ```
-app.py                 entry point (GUI / --sync / --search / --status)
+app.py                 entry point (GUI / --sync / --search / --factcheck / --status)
 requirements.txt       pinned dependencies
 src/
   config.py            settings + paths
   zotero_client.py     Zotero local API + read-only SQLite fallback
-  embedder.py          multilingual-e5-large, chunking, E5 prefixes
-  vector_store.py      FAISS index (flat → IVF), persistence
-  indexer.py           steps 2-4 + incremental sync
-  search.py            steps 5-7
-  gui.py               PyQt6 desktop UI
+  local_library.py     PDFs imported directly into the app
+  chunker.py           sentence-aligned passages, page tracking, bibliography filter
+  embedder.py          multilingual-e5-large, E5 prefixes
+  vector_store.py      FAISS index, per-passage search, persistence
+  library_db.py        SQLite: passage text, highlights, stars, fact-check history
+  indexer.py           incremental sync (Zotero + imported PDFs)
+  search.py            paper-level and passage-level semantic search
+  highlights.py        AI key sentences + "find in paper" markers
+  nli.py               local NLI model (entailment / contradiction)
+  factcheck.py         citation parsing, paper matching, verdicts
+  graph.py             citation / similarity edges, force layout
+  services.py          facade used by the GUI and the CLI
+  gui.py               GUI entry point (→ src/ui)
+  ui/                  PyQt6 pages: dashboard, library, document, search,
+                       fact-check, graph, settings
+tests/                 unit tests (pytest)
 scripts/
   make_icon.py         SVG → .icns
   build_app.sh         build the double-clickable .app

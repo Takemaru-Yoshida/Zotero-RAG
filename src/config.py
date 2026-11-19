@@ -57,8 +57,11 @@ class Config:
     # E5 models REQUIRE the "query:" / "passage:" prefixes used in this app.
     embedding_model: str = "intfloat/multilingual-e5-large"
     embedding_dim: int = 1024
-    max_seq_length: int = 512           # tokens per chunk fed to the encoder
-    chunk_overlap_tokens: int = 64
+    max_seq_length: int = 512           # encoder input limit (tokens)
+    chunk_overlap_tokens: int = 64      # legacy (v1 index); unused since v2
+    # Passages are packed from whole sentences up to this many tokens. Smaller
+    # passages give sharper search hits, markers and fact-check evidence.
+    chunk_tokens: int = 256
     device: str = "auto"                # auto | cpu | cuda | mps
 
     # --- Retrieval ---
@@ -71,6 +74,21 @@ class Config:
     item_types: tuple = ("journalArticle", "preprint", "conferencePaper",
                          "book", "bookSection", "report", "thesis")
     batch_size: int = 16
+
+    # --- AI markers (document viewer) ---
+    auto_mark: bool = True              # show AI key-sentence markers by default
+    key_sentences: int = 5              # key sentences extracted per paper
+
+    # --- Citation fact-check (local NLI model; free, multilingual, offline) ---
+    nli_model: str = "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"
+    nli_device: str = "cpu"             # a few sentence pairs; CPU is enough
+    factcheck_candidates: int = 4       # passages of the cited paper to test
+    entail_threshold: float = 0.5       # P(entailment) needed for "supported"
+    contradict_threshold: float = 0.5   # P(contradiction) needed for "refuted"
+    strict_partial: bool = False        # count "partial" as needing review
+
+    # --- Relation graph ---
+    graph_neighbors: int = 3            # mutual k-NN for "similar" edges
 
     @classmethod
     def path(cls) -> Path:
@@ -108,6 +126,16 @@ class Config:
     @property
     def meta_path(self) -> Path:
         return app_data_dir() / "metadata.json"
+
+    @property
+    def db_path(self) -> Path:
+        return app_data_dir() / "library.db"
+
+    @property
+    def local_library_dir(self) -> Path:
+        d = app_data_dir() / "library"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     @property
     def model_cache_dir(self) -> Path:

@@ -37,7 +37,17 @@ class Paper:
     item_type: str = ""
     date_modified: str = ""       # used for incremental re-indexing
     fulltext: str = ""            # extracted body text (may be empty)
-    pdf_path: str = ""
+    pdf_path: str = ""            # absolute path of the PDF, when known
+    tags: list[str] = field(default_factory=list)
+    venue: str = ""               # journal / proceedings / publisher
+    doi: str = ""
+    date_added: str = ""
+    source: str = "zotero"        # "zotero" or "local" (imported PDF)
+
+    @property
+    def pages(self) -> int:
+        """Page count, from the form feeds that separate pages in the text."""
+        return self.fulltext.count("\f") + 1 if self.fulltext else 0
 
     @property
     def display_authors(self) -> str:
@@ -71,6 +81,10 @@ class SqliteBackend:
     def _connect(self) -> sqlite3.Connection:
         # Copy the DB so we never lock or mutate Zotero's live database.
         tmp = Path(tempfile.gettempdir()) / "zotero_rag_readonly.sqlite"
+        # Leftover journal files of an earlier copy must not be replayed onto
+        # this one.
+        for suffix in (".sqlite-wal", ".sqlite-shm"):
+            tmp.with_suffix(suffix).unlink(missing_ok=True)
         shutil.copy2(self.db_src, tmp)
         # Also copy the WAL if present so we see the latest committed data.
         wal = self.db_src.with_suffix(".sqlite-wal")
@@ -86,7 +100,7 @@ class SqliteBackend:
             placeholders = ",".join("?" for _ in self.item_types)
             rows = conn.execute(
                 f"""
-                SELECT i.itemID, i.key, i.dateModified, it.typeName
+                SELECT i.itemID, i.key, i.dateAdded, i.dateModified, it.typeName
                 FROM items i
                 JOIN itemTypes it ON i.itemTypeID = it.itemTypeID
                 WHERE it.typeName IN ({placeholders})
@@ -112,10 +126,26 @@ class SqliteBackend:
                     date_modified=r["dateModified"],
                     fulltext=fulltext,
                     pdf_path=pdf_path,
+                    tags=self._item_tags(conn, item_id),
+                    venue=_venue(fields),
+                    doi=fields.get("DOI", ""),
+                    date_added=r["dateAdded"] or "",
                 ))
             return papers
         finally:
             conn.close()
+
+    @staticmethod
+    def _item_tags(conn: sqlite3.Connection, item_id: int) -> list[str]:
+        rows = conn.execute(
+            """
+            SELECT t.name FROM itemTags it
+            JOIN tags t ON it.tagID = t.tagID
+            WHERE it.itemID = ? ORDER BY t.name
+            """,
+            (item_id,),
+        ).fetchall()
+        return [row["name"] for row in rows]
 
     @staticmethod
     def _item_fields(conn: sqlite3.Connection, item_id: int) -> dict[str, str]:
@@ -150,9 +180,8 @@ class SqliteBackend:
                 names.append(name)
         return names
 
-    @staticmethod
-    def _best_pdf(conn: sqlite3.Connection, item_id: int) -> tuple[str, str]:
-        """Return (storage_key, path) of a PDF attachment, if any."""
+    def _best_pdf(self, conn: sqlite3.Connection, item_id: int) -> tuple[str, str]:
+        """Return (storage_key, absolute path) of a PDF attachment, if any."""
         row = conn.execute(
             """
             SELECT i.key, ia.path
@@ -165,7 +194,12 @@ class SqliteBackend:
         ).fetchone()
         if not row:
             return "", ""
-        return row["key"], (row["path"] or "")
+        path = row["path"] or ""
+        # Stored attachments are recorded as "storage:<filename>" and live in
+        # <data dir>/storage/<attachment key>/<filename>.
+        if path.startswith("storage:"):
+            path = str(self.storage / row["key"] / path[len("storage:"):])
+        return row["key"], path
 
     def _fulltext(self, storage_key: str) -> str:
         """Read Zotero's extracted full-text cache for an attachment.
@@ -211,13 +245,13 @@ class LocalApiBackend:
             return False
 
     def fetch_papers(self) -> list[Paper]:
-        # Build a map of full text from the local cache (fast, offline).
-        ft_map: dict[str, str] = {}
+        # Full text and PDF paths come from the local cache (fast, offline).
+        local: dict[str, Paper] = {}
         if self.sqlite_fallback and self.sqlite_fallback.available():
-            for p in self.sqlite_fallback.fetch_papers():
-                if p.fulltext:
-                    ft_map[p.key] = p.fulltext
+            local = {p.key: p for p in self.sqlite_fallback.fetch_papers()}
 
+        allowed = (set(self.sqlite_fallback.item_types)
+                   if self.sqlite_fallback else None)
         papers: list[Paper] = []
         start, limit = 0, 100
         while True:
@@ -233,7 +267,12 @@ class LocalApiBackend:
                 break
             for entry in batch:
                 data = entry.get("data", {})
+                # Same item types as the SQLite backend, so the library does
+                # not change shape when Zotero is opened or closed.
+                if allowed and data.get("itemType") not in allowed:
+                    continue
                 key = data.get("key", "")
+                cached = local.get(key)
                 creators = data.get("creators", [])
                 authors = [
                     " ".join(p for p in (c.get("firstName"), c.get("lastName")) if p)
@@ -247,8 +286,17 @@ class LocalApiBackend:
                     authors=[a for a in authors if a],
                     year=str(data.get("date", ""))[:4],
                     item_type=data.get("itemType", ""),
-                    date_modified=data.get("dateModified", ""),
-                    fulltext=ft_map.get(key, ""),
+                    # "2024-01-02T03:04:05Z" -> "2024-01-02 03:04:05", the
+                    # SQLite format: switching backend must not re-embed.
+                    date_modified=str(data.get("dateModified", ""))
+                    .replace("T", " ").rstrip("Z"),
+                    fulltext=cached.fulltext if cached else "",
+                    pdf_path=cached.pdf_path if cached else "",
+                    tags=sorted(t.get("tag", "") for t in data.get("tags", [])
+                                if t.get("tag")),
+                    venue=_venue(data),
+                    doi=data.get("DOI", ""),
+                    date_added=data.get("dateAdded", ""),
                 ))
             if len(batch) < limit:
                 break
@@ -256,16 +304,33 @@ class LocalApiBackend:
         return papers
 
 
+_VENUE_FIELDS = ("publicationTitle", "proceedingsTitle", "bookTitle",
+                 "repository", "university", "publisher")
+
+
+def _venue(fields: dict) -> str:
+    """First non-empty venue-like field (journal, proceedings, publisher …)."""
+    for name in _VENUE_FIELDS:
+        value = fields.get(name)
+        if value:
+            return str(value)
+    return ""
+
+
 def _extract_pdf_text(pdf_path: Path, max_pages: int = 60) -> str:
-    """Best-effort PDF text extraction used only when no cache exists."""
+    """Best-effort PDF text extraction used only when no cache exists.
+
+    Pages are joined with form feeds, matching Zotero's full-text cache, so
+    passages can be labelled with their page number.
+    """
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(pdf_path))
         out = []
         for page in reader.pages[:max_pages]:
             out.append(page.extract_text() or "")
-        return "\n".join(out)
-    except Exception:
+        return "\f".join(out)
+    except Exception:  # noqa: BLE001 - any parser failure means "no text"
         return ""
 
 

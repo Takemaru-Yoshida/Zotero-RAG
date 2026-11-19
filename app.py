@@ -6,6 +6,7 @@ Usage:
   python app.py --sync     # headless: build/update the index, then exit
   python app.py --search "query text"   # headless search (prints results)
   python app.py --status   # show index/backend status
+  python app.py --factcheck draft.txt   # headless citation fact-check
 """
 from __future__ import annotations
 
@@ -57,6 +58,32 @@ def _headless_search(config: Config, query: str):
         print(f"      {h.zotero_uri}")
 
 
+def _headless_factcheck(config: Config, path: str):
+    from pathlib import Path
+
+    from src.services import Services
+
+    services = Services(config)
+    services.load()
+    if services.store.n_vectors == 0:
+        print("Index is empty. Run `python app.py --sync` first.")
+        return
+    text = Path(path).expanduser().read_text(encoding="utf-8")
+    results = services.factchecker.check(
+        text, progress=lambda msg, frac: print(f"[{int(frac*100):3d}%] {msg}"),
+        save=False)
+    if not results:
+        print("No citations of the form (Author, 2020) / Author (2020) found.")
+        return
+    print()
+    for i, r in enumerate(results, 1):
+        print(f"{i:2d}. [{r.verdict.upper():9s}] ({r.citation})  score={r.score:.2f}")
+        print(f"      claim   : {r.claim}")
+        if r.evidence:
+            print(f"      evidence: {r.evidence}  (p.{r.page}, {r.title[:60]})")
+        print(f"      note    : {r.note}")
+
+
 def _status(config: Config):
     from src.vector_store import VectorStore
     from src.zotero_client import ZoteroClient
@@ -80,6 +107,8 @@ def main():
                         help="run a search and print results")
     parser.add_argument("--status", action="store_true",
                         help="print index/backend status")
+    parser.add_argument("--factcheck", metavar="FILE",
+                        help="fact-check the citations in a text file")
     args = parser.parse_args()
 
     config = Config.load()
@@ -88,6 +117,8 @@ def main():
         _headless_sync(config)
     elif args.search:
         _headless_search(config, args.search)
+    elif args.factcheck:
+        _headless_factcheck(config, args.factcheck)
     elif args.status:
         _status(config)
     else:
