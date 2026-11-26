@@ -1,7 +1,7 @@
 """Query-time semantic search — spec steps 5, 6 and 7.
 
-The query text is embedded with the *same* model used for indexing (with the
-E5 ``query:`` prefix), compared against stored passage vectors by cosine
+The query text is embedded with the *same* model used for indexing (with that
+model's query prefix), compared against stored passage vectors by cosine
 similarity (via the FAISS inner-product index), and the top papers above the
 configured threshold are returned for display.
 """

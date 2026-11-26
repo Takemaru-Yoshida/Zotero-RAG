@@ -9,8 +9,8 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
 | 画面 | 内容 |
 |---|---|
 | ダッシュボード | 登録文献数・チェック済み引用数・要確認の引用数、最近の文献とファクトチェック履歴 |
-| ライブラリ | Zotero の文献 + アプリに直接追加した PDF。タイトル/著者/掲載誌・タグ・お気に入りで絞り込み |
-| 文献ビューア | 本文を一節ごとに表示。AI 重要文マーカー（緑）、「探したい文」の意味検索マーカー（黄）、関連文献 |
+| ライブラリ | Zotero の文献 + アプリに直接追加した PDF。フォルダ（Zotero コレクション + アプリ内のマイフォルダ）・タイトル/著者/掲載誌・タグ・お気に入りで絞り込み |
+| 文献ビューア | 「テキスト / PDF」ボタンで、抽出した本文（一節ごと）と元の PDF を切り替え。どちらにも AI 重要文マーカー（緑）と「探したい文」の意味検索マーカー（黄）を表示。関連文献 |
 | 意味検索 | ライブラリ全体から、質問と意味の近い**一節**を類似度順に表示（日英横断）。クリックで該当箇所へ |
 | 引用ファクトチェック | 原稿中の `(著者, 年)` / `著者 (年)` 引用を原文と照合し、支持 / 一部支持 / 矛盾 / 文献なし を根拠の一文つきで判定 |
 | 関連グラフ | 引用関係（本文中の参考文献から検出）と内容の類似（文献ベクトルの相互近傍）を可視化 |
@@ -19,7 +19,9 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
 - PDF の追加: 「＋ 文献を追加」またはウィンドウへのドラッグ&ドロップ。追加した PDF は
   文献ビューアの「情報を編集」で著者・出版年などを入力できます（ファクトチェックの照合に使用）。
 - 使用モデル（いずれも無料・ローカル実行、初回のみ Hugging Face から自動ダウンロード）:
-  - 埋め込み: `intfloat/multilingual-e5-large`（約 2.1 GB）
+  - 埋め込み: `Qwen/Qwen3-Embedding-4B`（約 8 GB、メモリ 16 GB 以上を推奨）。設定画面で
+    `Qwen3-Embedding-0.6B`（約 1.2 GB）や従来の `multilingual-e5-large`（約 2.1 GB）に
+    切り替えられます。切り替えるとアプリ再起動後に全文献を再インデックスします。
   - 引用ファクトチェックの含意判定: `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`
     （約 560 MB。「チェックする」を初めて押したときにダウンロード）
 - ダウンロード後はネットワークなしで起動・検索できます。
@@ -65,6 +67,19 @@ open Zotero-RAG.app          # GUI。または: venv/bin/python app.py
 > 新着論文だけを同期するため高速です。潜在ベクトルは各自の環境の
 > `~/Library/Application Support/Zotero-RAG/` に保存され、共有されません。
 
+### Zotero との同期とフォルダ
+
+- **同期のタイミング**: 起動時、サイドバーの「新着を確認」、および起動中は
+  5 分ごと（`config.json` の `auto_sync_minutes`。0 で自動同期を止める）。
+  Zotero で追加・変更・削除した文献はこのタイミングで反映されます。
+- **Zotero コレクション**: 入れ子も含めてライブラリ画面の左側に表示されます
+  （読み取り専用。編集は Zotero 側で行い、同期のたびに反映）。親コレクションを
+  選ぶと、サブコレクションの文献も表示します。
+- **マイフォルダ**: 「＋ 新しいフォルダ」で作成し、文献カードの右クリック、
+  または文献ページの「フォルダ」ボタンで出し入れします。1 つの文献を複数の
+  フォルダに入れられます。フォルダ名の右クリックで名前変更・削除。
+  Zotero 側には書き込みません。
+
 ## Quick start（セットアップ済みの場合）
 
 ```bash
@@ -101,12 +116,15 @@ src/
   zotero_client.py     Zotero local API + read-only SQLite fallback
   local_library.py     PDFs imported directly into the app
   chunker.py           sentence-aligned passages, page tracking, bibliography filter
-  embedder.py          multilingual-e5-large, E5 prefixes
+  embedding_models.py  supported embedding models (prefixes, vector size, threshold)
+  embedder.py          runs the configured embedding model
   vector_store.py      FAISS index, per-passage search, persistence
-  library_db.py        SQLite: passage text, highlights, stars, fact-check history
+  library_db.py        SQLite: passage text, highlights, stars, folders, fact-check history
+  folders.py           folder tree (Zotero collections + own folders)
   indexer.py           incremental sync (Zotero + imported PDFs)
   search.py            paper-level and passage-level semantic search
   highlights.py        AI key sentences + "find in paper" markers
+  pdf_locate.py        finds a marked sentence in a PDF page's text layer
   nli.py               local NLI model (entailment / contradiction)
   factcheck.py         citation parsing, paper matching, verdicts
   graph.py             citation / similarity edges, force layout

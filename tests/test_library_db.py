@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.library_db import HighlightRow, LibraryDB
+from src.library_db import APP, ZOTERO, HighlightRow, LibraryDB
 from src.local_library import is_local
 
 pytestmark = pytest.mark.unit
@@ -83,3 +83,64 @@ def test_local_docs_round_trip(db):
 
 def test_local_key_prefix():
     assert is_local("LOCAL-ABC") and not is_local("A55VM9XZ")
+
+
+def _own(db):
+    return {f.name: f for f in db.folders() if f.source == APP}
+
+
+def test_own_folders_hold_papers_and_can_be_renamed_and_deleted(db):
+    reading = db.add_folder("  読む予定 ")
+    db.add_folder("Attention")
+    db.set_in_folder(reading, "K1", True)
+    db.set_in_folder(reading, "K2", True)
+    db.set_in_folder(reading, "K2", True)        # filing twice is harmless
+    db.set_in_folder(reading, "K1", False)
+    assert _own(db)["読む予定"].keys == {"K2"}
+    assert [f.name for f in db.folders()] == ["Attention", "読む予定"]
+
+    db.rename_folder(reading, "読了")
+    assert _own(db)["読了"].keys == {"K2"}
+    db.delete_folder(reading)
+    assert list(_own(db)) == ["Attention"]
+    db.set_in_folder(reading, "K3", True)        # folder is gone: no orphan row
+    assert all(not f.keys for f in db.folders())
+
+
+def test_folder_names_must_be_filled_in_and_unique(db):
+    first = db.add_folder("Attention")
+    other = db.add_folder("Memory")
+    with pytest.raises(ValueError):
+        db.add_folder("   ")
+    with pytest.raises(ValueError):
+        db.add_folder("Attention")
+    with pytest.raises(ValueError):
+        db.rename_folder(other, "Attention")
+    assert {f.ref for f in db.folders()} == {str(first), str(other)}
+
+
+def test_deleting_a_paper_takes_it_out_of_its_folders(db):
+    folder = db.add_folder("Attention")
+    db.set_in_folder(folder, "K1", True)
+    db.set_in_folder(folder, "K2", True)
+    db.delete_document("K1", keep_star=True)     # vanished during a sync
+    assert _own(db)["Attention"].keys == {"K1", "K2"}
+    db.delete_document("K1")
+    assert _own(db)["Attention"].keys == {"K2"}
+
+
+def test_zotero_collections_are_mirrored_with_their_nesting(db):
+    mine = db.add_folder("Mine")
+    db.set_in_folder(mine, "K9", True)
+    cols = [("C1", "Vision", "", ["K1"]), ("C2", "Attention", "C1", ["K2", "K3"])]
+    assert db.replace_zotero_collections(cols) is True
+    assert db.replace_zotero_collections(cols) is False      # nothing changed
+    zotero = {f.ref: f for f in db.folders() if f.source == ZOTERO}
+    assert zotero["C2"].parent == zotero["C1"].id and zotero["C1"].parent == ""
+    assert zotero["C2"].keys == {"K2", "K3"}
+
+    # A paper moved and a collection removed in Zotero; own folders untouched.
+    assert db.replace_zotero_collections([("C1", "Vision", "", ["K1", "K2"])])
+    assert [(f.ref, f.keys) for f in db.folders() if f.source == ZOTERO] == [
+        ("C1", {"K1", "K2"})]
+    assert _own(db)["Mine"].keys == {"K9"}

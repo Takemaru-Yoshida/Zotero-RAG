@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QHBoxLayout, QMainWindow,
     QMessageBox, QProgressBar, QStackedWidget, QVBoxLayout, QWidget,
@@ -79,6 +79,16 @@ class MainWindow(QMainWindow):
         self.navigate("dashboard")
         self._refresh_status()
         self.start_sync()
+        # Pick up papers added to Zotero while the app stays open.
+        try:
+            minutes = float(self.services.config.auto_sync_minutes)
+        except (TypeError, ValueError):
+            minutes = 0.0
+        if minutes > 0:
+            self._sync_timer = QTimer(self)
+            self._sync_timer.timeout.connect(self.start_sync)
+            # At least a minute between checks, at most a day.
+            self._sync_timer.start(int(min(max(minutes, 1), 1440) * 60_000))
 
     # -- layout ------------------------------------------------------------- #
     def _build_sidebar(self) -> QWidget:
@@ -166,6 +176,9 @@ class MainWindow(QMainWindow):
         stale = self.services.needs_reindex()
         if stale:
             self.status.setText(f"{stale} 件の文献を新しい形式で再インデックスします…")
+        elif self.services.store.model_changed:
+            self.status.setText(
+                "Embedding モデルが変わったため、全文献を再インデックスします…")
         run_task(self, self.services.sync, self._on_sync_done,
                  self._on_sync_failed, self._on_progress)
 
@@ -181,7 +194,8 @@ class MainWindow(QMainWindow):
         self._refresh_status(
             f"同期: 追加 {result.added} / 更新 {result.updated} / "
             f"削除 {result.removed}")
-        if result.added or result.updated or result.removed:
+        if (result.added or result.updated or result.removed
+                or result.folders_changed):
             self.library_changed.emit()
 
     def _on_sync_failed(self, err: str) -> None:

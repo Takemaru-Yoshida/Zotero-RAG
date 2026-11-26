@@ -17,6 +17,7 @@ A ``Paper`` is the normalised unit handed to the rest of the pipeline.
 """
 from __future__ import annotations
 
+import logging
 import shutil
 import sqlite3
 import tempfile
@@ -25,6 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -132,6 +135,39 @@ class SqliteBackend:
                     date_added=r["dateAdded"] or "",
                 ))
             return papers
+        finally:
+            conn.close()
+
+    def fetch_collections(self) -> list[tuple[str, str, str, list[str]]]:
+        """Collections as ``(key, name, parent key or "", item keys)``."""
+        conn = self._connect()
+        try:
+            # Collections in Zotero's trash are listed in a table that older
+            # Zotero versions do not have.
+            has_trash = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'deletedCollections'"
+            ).fetchone()
+            trashed = ("WHERE c.collectionID NOT IN "
+                       "(SELECT collectionID FROM deletedCollections)"
+                       if has_trash else "")
+            rows = conn.execute(
+                f"""
+                SELECT c.collectionID, c.key, c.collectionName, p.key AS parent
+                FROM collections c
+                LEFT JOIN collections p ON c.parentCollectionID = p.collectionID
+                {trashed}
+                """).fetchall()
+            items: dict[int, list[str]] = {}
+            for r in conn.execute(
+                    """
+                    SELECT ci.collectionID, i.key FROM collectionItems ci
+                    JOIN items i ON ci.itemID = i.itemID
+                    WHERE i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                    """):
+                items.setdefault(r["collectionID"], []).append(r["key"])
+            return [(r["key"], r["collectionName"], r["parent"] or "",
+                     items.get(r["collectionID"], []))
+                    for r in rows]
         finally:
             conn.close()
 
@@ -365,3 +401,15 @@ class ZoteroClient:
             "Cannot reach Zotero. Start Zotero (with the local API enabled) "
             "or set the correct Zotero data directory in settings."
         )
+
+    def fetch_collections(self) -> list[tuple[str, str, str, list[str]]] | None:
+        """Zotero collections with their item keys, read from the database
+        file (it is current whether or not Zotero is running); ``None`` when
+        the data folder cannot be read, so the last known folders are kept."""
+        if not self.sqlite.available():
+            return None
+        try:
+            return self.sqlite.fetch_collections()
+        except (sqlite3.Error, OSError) as e:
+            logger.warning("Could not read the Zotero collections: %s", e)
+            return None

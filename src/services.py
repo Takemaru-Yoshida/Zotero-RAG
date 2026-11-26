@@ -16,7 +16,7 @@ from .factcheck import FactChecker
 from .graph import Graph, build_graph, related
 from .highlights import Highlighter
 from .indexer import Indexer, SyncResult
-from .library_db import LibraryDB
+from .library_db import FolderRow, LibraryDB
 from .local_library import LocalLibrary, is_local
 from .nli import NliModel
 from .search import SearchEngine
@@ -116,6 +116,23 @@ class Services:
 
     def toggle_star(self, key: str) -> bool:
         return self.db.toggle_star(key)
+
+    # -- folders ------------------------------------------------------------ #
+    def folders(self) -> list[FolderRow]:
+        """Zotero collections (read-only mirror) and the user's own folders."""
+        return self.db.folders()
+
+    def add_folder(self, name: str) -> int:
+        return self.db.add_folder(name)
+
+    def rename_folder(self, folder_id: int, name: str) -> None:
+        self.db.rename_folder(folder_id, name)
+
+    def delete_folder(self, folder_id: int) -> None:
+        self.db.delete_folder(folder_id)
+
+    def set_in_folder(self, folder_id: int, key: str, member: bool) -> None:
+        self.db.set_in_folder(folder_id, key, member)
 
     def needs_reindex(self) -> int:
         """Number of papers indexed by an older version of the app."""

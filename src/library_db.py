@@ -2,8 +2,9 @@
 
 Holds the passage text behind every vector (so search results, the document
 viewer and fact-check evidence can show the actual sentences), cached AI
-highlights, starred papers, fact-check history, and the metadata of PDFs that
-were imported directly into the app.
+highlights, starred papers, fact-check history, the metadata of PDFs that
+were imported directly into the app, and the folders of the library (the
+user's own folders plus a mirror of the Zotero collections).
 
 A fresh connection is opened per operation, which keeps the class safe to use
 from the GUI's worker threads.
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterable, Iterator, Sequence
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
@@ -37,7 +38,28 @@ CREATE TABLE IF NOT EXISTS local_docs (
     tags TEXT NOT NULL DEFAULT '[]', pdf_path TEXT NOT NULL DEFAULT '',
     fulltext TEXT NOT NULL DEFAULT '', date_added TEXT NOT NULL,
     date_modified TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS folder_items (
+    folder_id INTEGER NOT NULL, key TEXT NOT NULL,
+    PRIMARY KEY (folder_id, key));
+CREATE TABLE IF NOT EXISTS zotero_collections (
+    key TEXT PRIMARY KEY, name TEXT NOT NULL, parent TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS zotero_collection_items (
+    collection_key TEXT NOT NULL, key TEXT NOT NULL,
+    PRIMARY KEY (collection_key, key));
 """
+
+ZOTERO = "zotero"   # folder mirrored from a Zotero collection (read-only)
+APP = "app"         # folder created in this app
+
+
+def _folder_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("フォルダ名を入力してください。")
+    return name
 
 
 def now_iso() -> str:
@@ -70,6 +92,20 @@ class FactCheckRun:
     created_at: str
 
 
+@dataclass(frozen=True)
+class FolderRow:
+    """A folder of the library and the papers filed directly in it."""
+    source: str                 # ZOTERO or APP
+    ref: str                    # Zotero collection key, or the app folder id
+    name: str
+    parent: str = ""            # ``id`` of the parent folder ("" = top level)
+    keys: frozenset[str] = frozenset()
+
+    @property
+    def id(self) -> str:
+        return f"{self.source}:{self.ref}"
+
+
 class LibraryDB:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -98,9 +134,10 @@ class LibraryDB:
 
     def delete_document(self, key: str, keep_star: bool = False) -> None:
         """Drop a paper's passages and highlights (and its star, unless the
-        paper may come back, e.g. when it vanished during a Zotero sync)."""
+        paper may come back, e.g. when it vanished during a Zotero sync; its
+        place in the user's folders is kept in that case too)."""
         tables = ("chunks", "highlights") if keep_star else (
-            "chunks", "highlights", "stars")
+            "chunks", "highlights", "stars", "folder_items")
         with self._conn() as c:
             for table in tables:
                 c.execute(f"DELETE FROM {table} WHERE key = ?", (key,))
@@ -154,6 +191,89 @@ class LibraryDB:
                 return False
             c.execute("INSERT INTO stars (key) VALUES (?)", (key,))
             return True
+
+    # -- folders ------------------------------------------------------------ #
+    def add_folder(self, name: str) -> int:
+        """Create one of the user's own folders; returns its id."""
+        name = _folder_name(name)
+        try:
+            with self._conn() as c:
+                cur = c.execute(
+                    "INSERT INTO folders (name, created_at) VALUES (?, ?)",
+                    (name, now_iso()))
+                return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            raise ValueError(f"「{name}」という名前のフォルダは既にあります。") from None
+
+    def rename_folder(self, folder_id: int, name: str) -> None:
+        name = _folder_name(name)
+        try:
+            with self._conn() as c:
+                c.execute("UPDATE folders SET name = ? WHERE id = ?",
+                          (name, folder_id))
+        except sqlite3.IntegrityError:
+            raise ValueError(f"「{name}」という名前のフォルダは既にあります。") from None
+
+    def delete_folder(self, folder_id: int) -> None:
+        """Remove a folder; the papers in it stay in the library."""
+        with self._conn() as c:
+            c.execute("DELETE FROM folder_items WHERE folder_id = ?", (folder_id,))
+            c.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+
+    def set_in_folder(self, folder_id: int, key: str, member: bool) -> None:
+        """File a paper in one of the user's folders, or take it out."""
+        with self._conn() as c:
+            if member:
+                c.execute("INSERT OR IGNORE INTO folder_items (folder_id, key) "
+                          "SELECT id, ? FROM folders WHERE id = ?",
+                          (key, folder_id))
+            else:
+                c.execute("DELETE FROM folder_items WHERE folder_id = ? AND key = ?",
+                          (folder_id, key))
+
+    def folders(self) -> list[FolderRow]:
+        """Zotero collections first, then the user's folders, each by name."""
+        with self._conn() as c:
+            zotero = c.execute("SELECT key, name, parent FROM zotero_collections "
+                               "ORDER BY name COLLATE NOCASE").fetchall()
+            own = c.execute("SELECT id, name FROM folders "
+                            "ORDER BY name COLLATE NOCASE").fetchall()
+            members: dict[str, set[str]] = {}
+            for r in c.execute(
+                    "SELECT collection_key, key FROM zotero_collection_items"):
+                members.setdefault(f"{ZOTERO}:{r['collection_key']}", set()).add(r["key"])
+            for r in c.execute("SELECT folder_id, key FROM folder_items"):
+                members.setdefault(f"{APP}:{r['folder_id']}", set()).add(r["key"])
+        rows = [FolderRow(ZOTERO, r["key"], r["name"],
+                          f"{ZOTERO}:{r['parent']}" if r["parent"] else "")
+                for r in zotero]
+        rows += [FolderRow(APP, str(r["id"]), r["name"]) for r in own]
+        return [FolderRow(f.source, f.ref, f.name, f.parent,
+                          frozenset(members.get(f.id, ())))
+                for f in rows]
+
+    def replace_zotero_collections(
+            self, collections: Iterable[tuple[str, str, str, Iterable[str]]]) -> bool:
+        """Mirror the Zotero collections, given as ``(key, name, parent key,
+        item keys)``; returns whether anything changed."""
+        new = {key: (name, parent or "", frozenset(items))
+               for key, name, parent, items in collections}
+        old = {f.ref: (f.name, f.parent.partition(":")[2], f.keys)
+               for f in self.folders() if f.source == ZOTERO}
+        if new == old:
+            return False
+        with self._conn() as c:
+            c.execute("DELETE FROM zotero_collections")
+            c.execute("DELETE FROM zotero_collection_items")
+            c.executemany(
+                "INSERT INTO zotero_collections (key, name, parent) VALUES (?, ?, ?)",
+                [(key, name, parent) for key, (name, parent, _) in new.items()])
+            c.executemany(
+                "INSERT INTO zotero_collection_items (collection_key, key) "
+                "VALUES (?, ?)",
+                [(key, item) for key, (_, _, items) in new.items()
+                 for item in sorted(items)])
+        return True
 
     # -- fact-check history ------------------------------------------------- #
     def add_factcheck(self, title: str, manuscript: str,

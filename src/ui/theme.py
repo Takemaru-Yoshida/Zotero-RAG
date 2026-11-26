@@ -95,6 +95,14 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ border-radius: 3px; background: {C.primary}; }}
 QCheckBox {{ spacing: 8px; }}
+QTreeWidget {{
+    border: 1px solid {C.border}; border-radius: 10px; background: {C.card};
+    padding: 6px; outline: 0; selection-background-color: transparent;
+}}
+QTreeWidget::item {{ padding: 5px 4px; border-radius: 6px; }}
+QTreeWidget::item:hover {{ background: {C.secondary}; }}
+QTreeWidget::item:selected {{ background: {C.primary}; color: {C.primary_fg}; }}
+QTreeWidget::branch, QTreeWidget::branch:selected {{ background: {C.card}; }}
 QGraphicsView {{ border: none; background: {C.card}; }}
 """
 

@@ -7,6 +7,7 @@ index for faster search. It is safe to call on every app launch / search.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -37,6 +38,7 @@ class SyncResult:
     total_vectors: int
     backend: str
     index_kind: str
+    folders_changed: bool = False   # the Zotero collections changed
 
 
 class Indexer:
@@ -51,6 +53,10 @@ class Indexer:
         self.db = db or LibraryDB(config.db_path)
         self.local = local or LocalLibrary(config, self.db)
         self._loaded = False
+        # A sync and a PDF import run on different worker threads. One at a
+        # time: a paper imported halfway through a sync is not in the list the
+        # sync fetched, and would be removed again as "gone".
+        self._busy = threading.Lock()
 
     def ensure_loaded(self) -> None:
         if not self._loaded:
@@ -95,9 +101,10 @@ class Indexer:
     def add_local_pdf(self, pdf_path: str) -> Paper:
         """Import a PDF into the app's own library and index it right away."""
         self.ensure_loaded()
-        paper = self.local.import_pdf(pdf_path)
-        self.index_paper(paper)
-        self.store.save()
+        with self._busy:
+            paper = self.local.import_pdf(pdf_path)
+            self.index_paper(paper)
+            self.store.save()
         return paper
 
     def remove_local(self, key: str) -> None:
@@ -111,6 +118,10 @@ class Indexer:
     def sync(self, progress: ProgressCb = None) -> SyncResult:
         """Detect changes and (re)embed only what is necessary."""
         self.ensure_loaded()
+        with self._busy:
+            return self._sync(progress)
+
+    def _sync(self, progress: ProgressCb) -> SyncResult:
 
         def report(msg: str, frac: float = 0.0):
             if progress:
@@ -136,6 +147,13 @@ class Indexer:
                 f"{len(gone_zotero)} of {len(indexed_zotero)} indexed papers are "
                 "missing from Zotero. Sync was stopped to protect the index; "
                 "check the Zotero data folder in Settings.")
+        # Collections are mirrored on every sync: moving a paper between
+        # them does not change the paper, so it is not seen as an update.
+        # (After the check above, so a wrong library cannot replace them.)
+        collections = self.client.fetch_collections()
+        folders_changed = (collections is not None
+                           and self.db.replace_zotero_collections(collections))
+
         for key in gone:
             self.store.remove_paper(key)
             self.db.delete_document(key, keep_star=True)
@@ -172,4 +190,5 @@ class Indexer:
             added=added, updated=updated, removed=removed, skipped=skipped,
             total_papers=self.store.n_papers, total_vectors=self.store.n_vectors,
             backend=backend, index_kind=index_kind,
+            folders_changed=folders_changed,
         )

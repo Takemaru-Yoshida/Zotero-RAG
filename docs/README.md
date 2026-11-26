@@ -17,31 +17,53 @@ new papers appear); steps 5–7 run on every search.
 |------|--------------|------|
 | 1 | Connect to Zotero (local HTTP API, or read-only DB fallback) | [`zotero_client.py`](../src/zotero_client.py) |
 | 2 | Extract papers (journal articles, preprints, …) | `ZoteroClient.fetch_papers()` |
-| 3 | Embed each paper's full text with `multilingual-e5-large` | [`embedder.py`](../src/embedder.py) |
+| 3 | Embed each paper's full text with the embedding model (default `Qwen3-Embedding-4B`) | [`embedder.py`](../src/embedder.py) |
 | 4 | Store latent vectors in a FAISS index on disk | [`vector_store.py`](../src/vector_store.py) |
 | 5 | Embed the query text with the **same** model | `Embedder.embed_query()` |
 | 6 | Cosine similarity vs. all stored vectors | `VectorStore.search()` |
 | 7 | Show the most similar papers (top-K + threshold) | [`gui.py`](../src/gui.py) |
 
-**Incremental sync:** on every launch and on demand, the app compares each
-Zotero item's `dateModified` against what it indexed last time. Only new or
-changed papers are re-embedded; deleted papers are dropped. See
+**Incremental sync:** on every launch, on demand, and every
+`auto_sync_minutes` (default 5; 0 turns it off) while the app is open, the app
+compares each Zotero item's `dateModified` against what it indexed last time.
+Only new or changed papers are re-embedded; deleted papers are dropped. See
 [`indexer.py`](../src/indexer.py).
+
+**Folders:** every sync also mirrors the Zotero collections (nested,
+read-only) into `library.db`; the library page shows them next to the user's
+own folders, which exist only in the app. See
+[`folders.py`](../src/folders.py) and [`library_db.py`](../src/library_db.py).
 
 ---
 
 ## The embedding model
 
-**`intfloat/multilingual-e5-large`** (downloaded from the Hugging Face Hub only).
+Default: **`Qwen/Qwen3-Embedding-4B`** (downloaded from the Hugging Face Hub only).
 
-- Free, ~1.1 GB, runs fully offline after the first download.
-- Strong English **and** Japanese retrieval scores (MTEB / JMTEB).
+- Free, runs fully offline after the first download (~8 GB).
+- 2560-d vectors; loaded as float16 on the GPU (about 8 GB of memory, so a
+  machine with 16 GB or more is recommended).
 - Apple-Silicon GPU (MPS) / CUDA / CPU auto-detected.
-- E5 requires prefixes — the app adds `query:` and `passage:` automatically.
 
-> To try another model (e.g. `BAAI/bge-m3`), edit `embedding_model` and
-> `embedding_dim` in the config file (see below) and re-sync. Keep both the
-> index build and the queries on the same model.
+The model is chosen in **Settings → Embedding モデル**:
+
+| Model | Vector size | Download | Notes |
+|-------|-------------|----------|-------|
+| `Qwen/Qwen3-Embedding-4B` (default) | 2560 | ~8 GB | highest accuracy |
+| `Qwen/Qwen3-Embedding-0.6B` | 1024 | ~1.2 GB | light and fast |
+| `intfloat/multilingual-e5-large` | 1024 | ~2.1 GB | the previous default |
+
+Input prefixes (the Qwen3 query instruction, E5's `query:` / `passage:`),
+vector size and the default similarity threshold come from the model's profile
+in [`embedding_models.py`](../src/embedding_models.py).
+
+Changing the model takes effect after a restart. The index records which model
+built it, so the next sync re-embeds every paper, and `similarity_threshold`
+is reset to the new model's default (cosine scales differ between models).
+
+> Any other sentence-transformers model can be used by setting
+> `embedding_model` and `embedding_dim` in the config file (see below); it is
+> run without prefixes.
 
 ---
 

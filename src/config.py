@@ -11,6 +11,12 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .embedding_models import DEFAULT_MODEL, LEGACY_MODEL, profile_for
+
+# Bumped when saved settings must be migrated (see ``Config._migrate``).
+#   2: default embedding model became Qwen3-Embedding-4B
+CONFIG_VERSION = 2
+
 
 def _default_zotero_data_dir() -> Path:
     """Locate the Zotero data directory in a platform-aware way."""
@@ -40,6 +46,14 @@ def app_data_dir() -> Path:
     return base
 
 
+def _version(data: dict) -> int:
+    """Version of a saved config; files from before versioning count as 1."""
+    try:
+        return int(data.get("config_version", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
 @dataclass
 class Config:
     # --- Zotero integration ---
@@ -52,11 +66,18 @@ class Config:
     zotero_library_type: str = "user"   # "user" or "group"
     zotero_library_id: int = 0          # 0 = local "My Library"
 
-    # --- Embedding model (free, lightweight, multilingual EN+JA) ---
-    # multilingual-e5-large: strong MTEB scores for both English and Japanese.
-    # E5 models REQUIRE the "query:" / "passage:" prefixes used in this app.
-    embedding_model: str = "intfloat/multilingual-e5-large"
-    embedding_dim: int = 1024
+    config_version: int = CONFIG_VERSION
+
+    # --- Embedding model (free, local, multilingual EN+JA) ---
+    # Any model in ``embedding_models.MODEL_PROFILES``; prefixes, vector size
+    # and float16 loading follow from the profile. Changing the model makes
+    # the next sync rebuild the whole index.
+    embedding_model: str = DEFAULT_MODEL
+    # Taken from the profile for known models (see ``__post_init__``).
+    embedding_dim: int = 0
+    # Model picked in Settings; applied by ``load`` at the next start, so the
+    # running session keeps its model, index and threshold scale.
+    pending_embedding_model: str = ""
     max_seq_length: int = 512           # encoder input limit (tokens)
     chunk_overlap_tokens: int = 64      # legacy (v1 index); unused since v2
     # Passages are packed from whole sentences up to this many tokens. Smaller
@@ -66,7 +87,9 @@ class Config:
 
     # --- Retrieval ---
     top_k: int = 10                     # max results shown
-    similarity_threshold: float = 0.78  # cosine; results below are hidden
+    # Cosine; results below are hidden. The scale depends on the model, so
+    # this is reset to the profile's default whenever the model changes.
+    similarity_threshold: float = profile_for(DEFAULT_MODEL).default_threshold
     # Aggregate per-document score from its chunk scores: "max" or "mean".
     score_aggregation: str = "max"
 
@@ -74,9 +97,15 @@ class Config:
     item_types: tuple = ("journalArticle", "preprint", "conferencePaper",
                          "book", "bookSection", "report", "thesis")
     batch_size: int = 16
+    # While the app is open, check Zotero for new or changed papers this
+    # often (minutes; 0 = only at start-up and with the sync button).
+    auto_sync_minutes: float = 5
 
     # --- AI markers (document viewer) ---
     auto_mark: bool = True              # show AI key-sentence markers by default
+    # How a paper is shown: "text" (extracted text) or "pdf" (the original
+    # PDF with the markers drawn on it). Remembers the viewer's last choice.
+    document_view: str = "text"
     key_sentences: int = 5              # key sentences extracted per paper
 
     # --- Citation fact-check (local NLI model; free, multilingual, offline) ---
@@ -90,6 +119,31 @@ class Config:
     # --- Relation graph ---
     graph_neighbors: int = 3            # mutual k-NN for "similar" edges
 
+    def __post_init__(self) -> None:
+        profile = profile_for(self.embedding_model, self.embedding_dim)
+        if profile.dim:
+            self.embedding_dim = profile.dim
+
+    def use_model(self, name: str) -> None:
+        """Switch the embedding model, with its vector size and threshold."""
+        profile = profile_for(name, self.embedding_dim)
+        self.embedding_model = name
+        self.embedding_dim = profile.dim
+        self.similarity_threshold = profile.default_threshold
+
+    @classmethod
+    def _migrate(cls, data: dict) -> dict:
+        """Bring settings saved by an older version of the app up to date."""
+        if _version(data) < 2:
+            # The old default was written into every saved config; move those
+            # installs to the new default (a hand-picked model is kept).
+            if data.get("embedding_model", LEGACY_MODEL) == LEGACY_MODEL:
+                data["embedding_model"] = DEFAULT_MODEL
+                data.pop("embedding_dim", None)
+                data.pop("similarity_threshold", None)
+        data["config_version"] = CONFIG_VERSION
+        return data
+
     @classmethod
     def path(cls) -> Path:
         return app_data_dir() / "config.json"
@@ -100,11 +154,26 @@ class Config:
         if p.exists():
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("config.json is not a JSON object")
+                changed = _version(data) < CONFIG_VERSION
+                data = cls._migrate(data)
                 known = {f for f in cls.__dataclass_fields__}
                 clean = {k: v for k, v in data.items() if k in known}
                 if "item_types" in clean:
                     clean["item_types"] = tuple(clean["item_types"])
-                return cls(**clean)
+                cfg = cls(**clean)
+                if cfg.pending_embedding_model:
+                    cfg.use_model(cfg.pending_embedding_model)
+                    cfg.pending_embedding_model = ""
+                    changed = True
+                if changed:
+                    try:
+                        cfg.save()
+                    except OSError:
+                        # Read-only settings must not stop the app starting.
+                        pass
+                return cfg
             except (json.JSONDecodeError, TypeError, ValueError):
                 # Corrupt config should never crash the app; fall back to defaults.
                 pass

@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLineEdit, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QHBoxLayout, QLineEdit, QSpinBox, QVBoxLayout, QWidget,
 )
 
+from ..embedding_models import MODEL_PROFILES
 from ..zotero_client import ZoteroClient
 from .widgets import Card, PageHeader, button, label, scrollable
 
@@ -57,6 +58,21 @@ class SettingsPage(QWidget):
         search.box.addLayout(form)
         box.addWidget(search)
 
+        # -- embedding model -------------------------------------------------- #
+        model = Card()
+        model.box.addWidget(label("Embedding モデル", "h2"))
+        model.box.addWidget(label(
+            "すべて無料で、この Mac の中だけで動作します。変更すると初回に"
+            "モデルをダウンロードし、アプリの再起動後に全文献を再インデックス"
+            "します（最小類似度もモデルの既定値に戻ります）。", "muted"))
+        self.model = QComboBox()
+        for profile in MODEL_PROFILES.values():
+            self.model.addItem(profile.label, profile.name)
+        if config.embedding_model not in MODEL_PROFILES:
+            self.model.addItem(config.embedding_model, config.embedding_model)
+        model.box.addWidget(self.model)
+        box.addWidget(model)
+
         # -- AI features ------------------------------------------------------ #
         ai = Card()
         ai.box.addWidget(label("AI 機能", "h2"))
@@ -94,6 +110,8 @@ class SettingsPage(QWidget):
         self.top_k.setValue(config.top_k)
         self.threshold.setValue(config.similarity_threshold)
         self.neighbours.setValue(config.graph_neighbors)
+        self.model.setCurrentIndex(max(0, self.model.findData(
+            config.pending_embedding_model or config.embedding_model)))
         self.auto_mark.setChecked(config.auto_mark)
         self.strict.setChecked(config.strict_partial)
         self.saved.setText("")
@@ -125,11 +143,20 @@ class SettingsPage(QWidget):
         config.graph_neighbors = self.neighbours.value()
         config.auto_mark = self.auto_mark.isChecked()
         config.strict_partial = self.strict.isChecked()
+        # Applied at the next start (see ``Config.load``); empty = no change.
+        picked = self.model.currentData()
+        config.pending_embedding_model = (
+            "" if picked == config.embedding_model else picked)
+        model_changed = bool(config.pending_embedding_model)
         config.save()
         if dir_changed:
             s.indexer.client = ZoteroClient(config)
         s.invalidate_graph()
         self.refresh()
-        self.saved.setText(
-            "保存しました。" + ("「新着を確認」で新しいフォルダを同期してください。"
-                           if dir_changed else ""))
+        note = ""
+        if model_changed:
+            # This session keeps the model its index was built with.
+            note = "アプリを再起動すると、新しいモデルで再インデックスします。"
+        elif dir_changed:
+            note = "「新着を確認」で新しいフォルダを同期してください。"
+        self.saved.setText("保存しました。" + note)

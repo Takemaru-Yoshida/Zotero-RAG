@@ -1,24 +1,34 @@
-"""Document viewer: full text with AI markers, in-paper semantic find,
-key-sentence list and related papers."""
+"""Document viewer: full text or the original PDF with AI markers, in-paper
+semantic find, key-sentence list and related papers."""
 from __future__ import annotations
 
 import html
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QCursor, QDesktopServices
 from PyQt6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLineEdit,
-    QMessageBox, QPlainTextEdit, QTextBrowser, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
+    QHBoxLayout, QLineEdit, QMessageBox, QPlainTextEdit, QStackedWidget,
+    QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from ..highlights import Highlight
+from .folder_panel import show_folder_menu
+from .pdf_view import PdfMark, PdfView
 from .theme import C
 from .widgets import (Card, LinkLabel, button, clear_layout, label, scrollable,
                       tag_row)
 from .workers import run_task
 
+logger = logging.getLogger(__name__)
+
 _SMALL = f"color:{C.muted_fg}; font-size:11px; font-family:sans-serif;"
+TEXT, PDF = "text", "pdf"
+# The passage a search hit points at, on a PDF page (the pale tint used in
+# the text view would not show on paper white).
+PDF_FOCUS = "#d5defa"
 
 
 def _marked(text: str, sentence: str, color: str) -> str:
@@ -89,6 +99,8 @@ class DocumentPage(QWidget):
         self.key_marks: list[Highlight] = []
         self.query_marks: list[Highlight] = []
         self.query = ""
+        self.mode = PDF if app.services.config.document_view == PDF else TEXT
+        self.pdf_on = False     # the PDF is what is on screen right now
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -108,9 +120,25 @@ class DocumentPage(QWidget):
         left.addLayout(self.buttons)
         self.abstract = label("", "abstract", selectable=True)
         left.addWidget(self.abstract)
+        modes = QHBoxLayout()
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons = {}
+        for mode, text in ((TEXT, "テキスト"), (PDF, "PDF")):
+            btn = button(text, "chip", lambda m=mode: self._set_mode(m))
+            btn.setCheckable(True)
+            self.mode_group.addButton(btn)
+            self.mode_buttons[mode] = btn
+            modes.addWidget(btn)
+        self.mode_note = label("", "muted")
+        modes.addWidget(self.mode_note, 1)
+        left.addLayout(modes)
         self.body = QTextBrowser()
         self.body.setOpenLinks(False)
-        left.addWidget(self.body, 1)
+        self.pdf = PdfView()
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.body)
+        self.stack.addWidget(self.pdf)
+        left.addWidget(self.stack, 1)
         root.addLayout(left, 1)
 
         side = QWidget()
@@ -192,6 +220,7 @@ class DocumentPage(QWidget):
         self.abstract.setVisible(bool(doc.abstract))
         self.abstract.setText(f"要旨　{doc.abstract}")
         self._build_buttons()
+        self._apply_mode()
         self._render_body()
         self._load_side(key)
 
@@ -200,6 +229,7 @@ class DocumentPage(QWidget):
         doc = self.doc
         star = "★ お気に入り" if doc.starred else "☆ お気に入り"
         self.buttons.addWidget(button(star, "outline", self._toggle_star))
+        self.buttons.addWidget(button("フォルダ", "outline", self._folders))
         if doc.doi:
             self.buttons.addWidget(button("DOI", "outline", lambda: self._open(
                 QUrl(f"https://doi.org/{doc.doi}"))))
@@ -276,13 +306,76 @@ class DocumentPage(QWidget):
             parts.append(f'<p style="{_SMALL}">本文がありません。'
                          "「新着を確認」で再インデックスしてください。</p>")
         self.body.setHtml("".join(parts))
+        if self.pdf_on:
+            self._mark_pdf(ai, found)
         if keep_scroll:
             bar.setValue(position)
         elif self.focus is not None:
             self._scroll_to(self.focus)
 
     def _scroll_to(self, chunk_idx: int) -> None:
-        self.body.scrollToAnchor(f"c{chunk_idx}")
+        if self.pdf_on:
+            page = next((c.page for c in self.chunks if c.idx == chunk_idx), 1)
+            self.pdf.scroll_to(chunk_idx, page)
+        else:
+            self.body.scrollToAnchor(f"c{chunk_idx}")
+
+    # -- text / PDF --------------------------------------------------------- #
+    def _pdf_path(self) -> str:
+        path = self.doc.pdf_path if self.doc else ""
+        return path if path and Path(path).exists() else ""
+
+    def _set_mode(self, mode: str) -> None:
+        if mode == self.mode and self.pdf_on == (mode == PDF):
+            return      # already showing it
+        self.mode = mode
+        config = self.app.services.config
+        if config.document_view != mode:
+            config.document_view = mode
+            try:
+                config.save()
+            except OSError as e:
+                logger.warning("Could not save the view setting: %s", e)
+        self._apply_mode()
+        self._render_body()
+        marks = self.query_marks or (
+            self.key_marks if self.ai_toggle.isChecked() else [])
+        if self.focus is None and marks and self.pdf_on:
+            self._scroll_to(marks[0].chunk_idx)
+
+    def _apply_mode(self) -> None:
+        """Show the PDF when it is asked for and can be opened, else the text."""
+        path = self._pdf_path()
+        self.mode_buttons[PDF].setEnabled(bool(path))
+        self.mode_buttons[PDF].setToolTip(
+            "" if path else "この文献には PDF がありません")
+        self.pdf_on = self.mode == PDF and bool(path) and self.pdf.load(path)
+        note = ""
+        if self.mode == PDF and not self.pdf_on:
+            note = ("PDF を開けないため、テキストで表示しています。" if path
+                    else "PDF がないため、テキストで表示しています。")
+        if not self.pdf_on:
+            self.pdf.close_pdf()
+        self.mode_note.setText(note)
+        self.mode_buttons[PDF if self.pdf_on else TEXT].setChecked(True)
+        self.stack.setCurrentWidget(self.pdf if self.pdf_on else self.body)
+
+    def _mark_pdf(self, ai: dict, found: dict) -> None:
+        """Draw on the PDF what the text view marks."""
+        marks: list[PdfMark] = []
+        for c in self.chunks:
+            q, k = found.get(c.idx), ai.get(c.idx)
+            if q:
+                marks.append(PdfMark(c.idx, c.page, q.sentence or c.text, C.marker))
+            elif k:
+                marks.append(PdfMark(c.idx, c.page, k.sentence or c.text,
+                                     C.marker_ai))
+            elif c.idx == self.focus:
+                marks.append(PdfMark(c.idx, c.page, c.text, PDF_FOCUS))
+        missing = self.pdf.set_marks(marks)
+        self.mode_note.setText(
+            f"{missing} 件のマーカーは PDF 上の位置を特定できませんでした"
+            "（テキスト表示で確認できます）。" if missing else "")
 
     # -- find in paper ------------------------------------------------------ #
     def _find(self) -> None:
@@ -324,6 +417,10 @@ class DocumentPage(QWidget):
     def _open(self, url: QUrl) -> None:
         if not QDesktopServices.openUrl(url):
             QMessageBox.warning(self, "開けませんでした", url.toString())
+
+    def _folders(self) -> None:
+        show_folder_menu(self, self.app.services, self.key, QCursor.pos(),
+                         lambda: None)
 
     def _toggle_star(self) -> None:
         self.app.services.toggle_star(self.key)

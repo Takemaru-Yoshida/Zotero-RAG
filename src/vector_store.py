@@ -23,10 +23,12 @@ from typing import Iterable
 import faiss
 import numpy as np
 
+from .embedding_models import LEGACY_MODEL
+
 logger = logging.getLogger(__name__)
 
 # Below this many chunks a brute-force flat index is fastest and exact
-# (a 1024-d flat search over 50k vectors takes a few milliseconds).
+# (a flat search over 50k vectors takes a few milliseconds).
 IVF_THRESHOLD = 50_000
 
 # Bumped when the chunking / stored metadata changes so that papers indexed by
@@ -40,6 +42,9 @@ class VectorStore:
     def __init__(self, config):
         self.config = config
         self.dim = config.embedding_dim
+        # Fixed for the life of the store: the settings page may change the
+        # configured model while this index still holds the old model's vectors.
+        self.model_name = config.embedding_model
         self.index: faiss.Index | None = None
         # Per-vector metadata: list of {key, chunk}
         self.row_meta: list[dict] = []
@@ -49,25 +54,41 @@ class VectorStore:
         self._lock = threading.RLock()
         self._matrix: np.ndarray | None = None   # cached copy of all vectors
         self.ref_rule = 0    # version of the rule that set the "ref" flags
+        # True when the index on disk was built by another embedding model and
+        # was therefore left out; the next sync embeds every paper again.
+        self.model_changed = False
 
     # -- lifecycle ---------------------------------------------------------- #
     def load(self) -> bool:
         ip, mp = self.config.index_path, self.config.meta_path
         with self._lock:
             if ip.exists() and mp.exists():
-                self.index = faiss.read_index(str(ip))
                 data = json.loads(mp.read_text(encoding="utf-8"))
+                built_with = data.get("embedding_model", LEGACY_MODEL)
+                if built_with != self.model_name:
+                    # Vectors of two models are not comparable (and usually
+                    # differ in size): start empty and let sync rebuild.
+                    logger.warning(
+                        "Index was built with %s but the configured model is "
+                        "%s; the next sync rebuilds the index.",
+                        built_with, self.model_name)
+                    self.model_changed = True
+                    return False
+                self.index = faiss.read_index(str(ip))
                 self.row_meta = data.get("row_meta", [])
                 self.papers = data.get("papers", {})
                 self.ref_rule = int(data.get("ref_rule", 0))
                 self._matrix = None
-                if len(self.row_meta) != self.index.ntotal:
+                if (len(self.row_meta) != self.index.ntotal
+                        or self.index.d != self.dim):
                     # Vectors and metadata out of step (e.g. files from two
                     # different saves): start empty and let sync rebuild.
                     logger.error(
-                        "Index has %d vectors but metadata has %d rows; "
-                        "ignoring both, the next sync rebuilds the index.",
-                        self.index.ntotal, len(self.row_meta))
+                        "Index has %d vectors of size %d but metadata has %d "
+                        "rows and the model produces size %d; ignoring both, "
+                        "the next sync rebuilds the index.",
+                        self.index.ntotal, self.index.d, len(self.row_meta),
+                        self.dim)
                     self.index, self.row_meta, self.papers = None, [], {}
                     return False
                 return True
@@ -85,11 +106,14 @@ class VectorStore:
             faiss.write_index(self.index, str(tmp_index))
             tmp_meta.write_text(
                 json.dumps({"row_meta": self.row_meta, "papers": self.papers,
-                            "ref_rule": self.ref_rule}, ensure_ascii=False),
+                            "ref_rule": self.ref_rule,
+                            "embedding_model": self.model_name},
+                           ensure_ascii=False),
                 encoding="utf-8",
             )
             os.replace(tmp_index, ip)
             os.replace(tmp_meta, mp)
+            self.model_changed = False
 
     def _new_index(self) -> faiss.Index:
         return faiss.IndexFlatIP(self.dim)
