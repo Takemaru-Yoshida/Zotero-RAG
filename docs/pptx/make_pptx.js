@@ -1,5 +1,7 @@
 // Generates docs/pptx/Zotero-RAG.pptx — an illustrated walkthrough of
 // Zotero-RAG. Run: node make_pptx.js
+// Zotero-RAG.pdf next to it is exported from the deck with PowerPoint
+// (File > Export > PDF) after regenerating.
 const path = require("path");
 const pptxgen = require("pptxgenjs");
 
@@ -130,7 +132,7 @@ s.addText("Zotero-RAG", {
   x: 0.8, y: 2.1, w: 11.7, h: 1.2, fontFace: FONT, fontSize: 54, bold: true, color: C.white,
 });
 s.addText("Zotero ライブラリを「意味」で扱う — 文献管理・意味検索・引用ファクトチェック", {
-  x: 0.82, y: 3.3, w: 11.7, h: 0.7, fontFace: FONT, fontSize: 22, color: "C7D6F2",
+  x: 0.82, y: 3.3, w: 11.9, h: 0.7, fontFace: FONT, fontSize: 20, color: "C7D6F2",
 });
 s.addText("Local desktop app · Qwen3-Embedding + FAISS · English & 日本語", {
   x: 0.82, y: 4.0, w: 11.7, h: 0.5, fontFace: FONT, fontSize: 15, color: "9FB6E6",
@@ -246,11 +248,17 @@ chip(s, 7.8, 2.1, 2.4, 1.0, "質問ベクトル", C.blueDk, "2560 次元（4B）
 
 s.addText("cosine similarity", { x: 9.7, y: 3.4, w: 3, h: 0.3, fontFace: FONT, fontSize: 12, italic: true, color: C.sub });
 const cx = 10.9, cy = 5.0, r = 1.2;
-s.addShape(pptx.ShapeType.line, { x: cx, y: cy, w: r, h: -r * 0.2, line: { color: C.blueDk, width: 3, endArrowType: "triangle" } });
+// A vector from (cx, cy) up and to the right. PowerPoint rejects a negative
+// height, so the box is given upright and the line is flipped inside it.
+function vector(dx, dy, color, width) {
+  s.addShape(pptx.ShapeType.line, { x: cx, y: cy - dy, w: dx, h: dy, flipV: true,
+    line: { color, width, endArrowType: "triangle" } });
+}
+vector(r, r * 0.2, C.blueDk, 3);
 s.addText("q", { x: cx + r, y: cy - r * 0.2 - 0.3, w: 0.4, h: 0.3, color: C.blueDk, bold: true, fontFace: FONT, fontSize: 13 });
 const docs = [[r * 0.95, -r * 0.45, C.green, "0.83"], [r * 0.8, -r * 0.75, C.amber, "0.58"], [r * 0.5, -r * 1.1, C.red, "0.36"]];
 docs.forEach(d => {
-  s.addShape(pptx.ShapeType.line, { x: cx, y: cy, w: d[0], h: d[1], line: { color: d[2], width: 2, endArrowType: "triangle" } });
+  vector(d[0], -d[1], d[2], 2);
   s.addText(d[3], { x: cx + d[0], y: cy + d[1] - 0.25, w: 0.6, h: 0.3, color: d[2], bold: true, fontFace: FONT, fontSize: 11 });
 });
 

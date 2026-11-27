@@ -33,7 +33,7 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
 ドキュメント / Documentation:
 - **[docs/設計書.md](docs/設計書.md)** — 日本語の設計説明書（仕組み・保存先・設定項目・操作方法・トラブル対処）
 - **[docs/README.md](docs/README.md)** — English documentation
-- **[docs/pptx/Zotero-RAG.pptx](docs/pptx/Zotero-RAG.pptx)** — 図解スライド（`node docs/pptx/make_pptx.js` で再生成）
+- **[docs/pptx/Zotero-RAG.pptx](docs/pptx/Zotero-RAG.pptx)** / **[PDF 版](docs/pptx/Zotero-RAG.pdf)** — 図解スライド（`node docs/pptx/make_pptx.js` で pptx を再生成。PDF は PowerPoint から書き出し）
 
 ## クローン／ダウンロード後の立ち上げ方 (Setup after clone)
 
