@@ -14,7 +14,7 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
 | 意味検索 | ライブラリ全体から、質問と意味の近い**一節**を類似度順に表示（日英横断）。クリックで該当箇所へ |
 | 引用ファクトチェック | 原稿中の `(著者, 年)` / `著者 (年)` 引用を原文と照合し、支持 / 一部支持 / 矛盾 / 文献なし を根拠の一文つきで判定 |
 | 関連グラフ | 引用関係（本文中の参考文献から検出）と内容の類似（文献ベクトルの相互近傍）を可視化 |
-| 設定 | Zotero データフォルダ、検索の件数・しきい値、AI 機能の切り替え、システム情報 |
+| 設定 | Zotero データフォルダ、検索の件数・しきい値、Embedding モデル、AI 機能の切り替え、システム情報 |
 
 - PDF の追加: 「＋ 文献を追加」またはウィンドウへのドラッグ&ドロップ。追加した PDF は
   文献ビューアの「情報を編集」で著者・出版年などを入力できます（ファクトチェックの照合に使用）。
@@ -31,9 +31,9 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
   再構築されます（101 文献で数分〜十数分）。
 
 ドキュメント / Documentation:
-- **[docs/設計書.md](docs/設計書.md)** — 日本語の設計説明書（アプリの仕組み・操作方法）
+- **[docs/設計書.md](docs/設計書.md)** — 日本語の設計説明書（仕組み・保存先・設定項目・操作方法・トラブル対処）
 - **[docs/README.md](docs/README.md)** — English documentation
-- **[docs/pptx/Zotero-RAG.pptx](docs/pptx/Zotero-RAG.pptx)** — illustrated walkthrough
+- **[docs/pptx/Zotero-RAG.pptx](docs/pptx/Zotero-RAG.pptx)** — 図解スライド（`node docs/pptx/make_pptx.js` で再生成）
 
 ## クローン／ダウンロード後の立ち上げ方 (Setup after clone)
 
@@ -85,11 +85,9 @@ open Zotero-RAG.app          # GUI。または: venv/bin/python app.py
 ## Quick start（セットアップ済みの場合）
 
 ```bash
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
-venv/bin/python scripts/make_icon.py     # build the app icon
-bash scripts/build_app.sh                # build Zotero-RAG.app
 open Zotero-RAG.app                       # launch the GUI
+# or
+venv/bin/python app.py
 ```
 
 Command-line:
@@ -133,11 +131,12 @@ src/
   services.py          facade used by the GUI and the CLI
   gui.py               GUI entry point (→ src/ui)
   ui/                  PyQt6 pages: dashboard, library, document, search,
-                       fact-check, graph, settings
+                       fact-check, graph, settings; first-run model choice,
+                       folder panel, PDF view
 tests/                 unit tests (pytest)
 scripts/
   make_icon.py         SVG → .icns
   build_app.sh         build the double-clickable .app
 assets/                icon.svg / icon.png / icon.icns
-docs/                  README + PptxGenJS presentation
+docs/                  設計書 (JA) + README (EN) + PptxGenJS presentation
 ```

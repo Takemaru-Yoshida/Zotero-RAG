@@ -9,9 +9,9 @@ model's profile in ``embedding_models``:
   * Qwen3-Embedding: an instruction before search queries, plain passages
   * E5: ``query: <text>`` for queries, ``passage: <text>`` for passages
 
-Long documents are split into overlapping token windows; each window is
-embedded separately so that a relevant passage anywhere in a long paper can be
-matched. Embeddings are L2-normalised so that an inner-product index computes
+Long documents are split into sentence-aligned passages (see ``chunker``);
+each passage is embedded separately so that a relevant passage anywhere in a
+long paper can be matched. Embeddings are L2-normalised so that an inner-product index computes
 cosine similarity directly.
 """
 from __future__ import annotations
