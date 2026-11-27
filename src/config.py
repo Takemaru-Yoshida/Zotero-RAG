@@ -15,7 +15,8 @@ from .embedding_models import DEFAULT_MODEL, LEGACY_MODEL, profile_for
 
 # Bumped when saved settings must be migrated (see ``Config._migrate``).
 #   2: default embedding model became Qwen3-Embedding-4B
-CONFIG_VERSION = 2
+#   3: the embedding model is chosen at the first start (``model_chosen``)
+CONFIG_VERSION = 3
 
 
 def _default_zotero_data_dir() -> Path:
@@ -78,6 +79,9 @@ class Config:
     # Model picked in Settings; applied by ``load`` at the next start, so the
     # running session keeps its model, index and threshold scale.
     pending_embedding_model: str = ""
+    # False until the model was picked at the first start of the app (see
+    # ``ui.model_choice``); installs from before that question count as asked.
+    model_chosen: bool = False
     max_seq_length: int = 512           # encoder input limit (tokens)
     chunk_overlap_tokens: int = 64      # legacy (v1 index); unused since v2
     # Passages are packed from whole sentences up to this many tokens. Smaller
@@ -141,6 +145,9 @@ class Config:
                 data["embedding_model"] = DEFAULT_MODEL
                 data.pop("embedding_dim", None)
                 data.pop("similarity_threshold", None)
+        if _version(data) < 3 and (app_data_dir() / "metadata.json").exists():
+            # This install already built its index with a model; do not ask.
+            data.setdefault("model_chosen", True)
         data["config_version"] = CONFIG_VERSION
         return data
 

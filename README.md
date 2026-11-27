@@ -19,9 +19,11 @@ Zotero ライブラリの文献管理・意味検索（RAG）・AI マーカー�
 - PDF の追加: 「＋ 文献を追加」またはウィンドウへのドラッグ&ドロップ。追加した PDF は
   文献ビューアの「情報を編集」で著者・出版年などを入力できます（ファクトチェックの照合に使用）。
 - 使用モデル（いずれも無料・ローカル実行、初回のみ Hugging Face から自動ダウンロード）:
-  - 埋め込み: `Qwen/Qwen3-Embedding-4B`（約 8 GB、メモリ 16 GB 以上を推奨）。設定画面で
-    `Qwen3-Embedding-0.6B`（約 1.2 GB）や従来の `multilingual-e5-large`（約 2.1 GB）に
-    切り替えられます。切り替えるとアプリ再起動後に全文献を再インデックスします。
+  - 埋め込み: 初回起動時に `Qwen/Qwen3-Embedding-4B`（高精度・約 8 GB、メモリ 16 GB 以上を
+    推奨）か `Qwen/Qwen3-Embedding-0.6B`（軽量・約 1.2 GB）を選びます。メモリ量に応じた
+    おすすめが選択済みで表示されます。あとから設定画面で変更でき（従来の
+    `multilingual-e5-large` 約 2.1 GB も選択可）、変更するとアプリ再起動後に全文献を
+    再インデックスします。`--sync` などコマンドラインだけで使い始めた場合は 4B になります。
   - 引用ファクトチェックの含意判定: `MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7`
     （約 560 MB。「チェックする」を初めて押したときにダウンロード）
 - ダウンロード後はネットワークなしで起動・検索できます。
@@ -55,7 +57,7 @@ venv/bin/pip install -r requirements.txt
 venv/bin/python scripts/make_icon.py
 bash scripts/build_app.sh
 
-# 4. 起動（初回はモデル約1.1GBをHuggingFaceから自動DL＋索引構築）
+# 4. 起動（初回は Embedding モデルを選択 → HuggingFace から自動DL＋索引構築）
 open Zotero-RAG.app          # GUI。または: venv/bin/python app.py
 ```
 
@@ -63,7 +65,7 @@ open Zotero-RAG.app          # GUI。または: venv/bin/python app.py
 > 手順 2 のあと `venv/bin/python app.py`（Windows は `venv\Scripts\python app.py`）
 > で GUI を起動できます。
 >
-> 初回起動時にモデルのダウンロードとインデックス構築が走ります。2回目以降は
+> 初回起動時に Embedding モデル（4B / 0.6B）を選ぶと、ダウンロードとインデックス構築が走ります。2回目以降は
 > 新着論文だけを同期するため高速です。潜在ベクトルは各自の環境の
 > `~/Library/Application Support/Zotero-RAG/` に保存され、共有されません。
 

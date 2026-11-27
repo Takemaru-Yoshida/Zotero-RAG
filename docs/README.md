@@ -45,7 +45,10 @@ Default: **`Qwen/Qwen3-Embedding-4B`** (downloaded from the Hugging Face Hub onl
   machine with 16 GB or more is recommended).
 - Apple-Silicon GPU (MPS) / CUDA / CPU auto-detected.
 
-The model is chosen in **Settings → Embedding モデル**:
+The first time the app starts it asks which of the two Qwen3 models to use
+(the one that suits the machine's memory is preselected: 4B from 16 GB, 0.6B
+below; see [`ui/model_choice.py`](../src/ui/model_choice.py)). It can be changed
+later in **Settings → Embedding モデル**:
 
 | Model | Vector size | Download | Notes |
 |-------|-------------|----------|-------|

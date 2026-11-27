@@ -17,12 +17,14 @@ from PyQt6.QtWidgets import (
     QMessageBox, QProgressBar, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from ..config import Config
 from ..services import Services
 from .dashboard import DashboardPage
 from .document import DocumentPage
 from .factcheck_page import FactCheckPage
 from .graph_page import GraphPage
 from .library import LibraryPage
+from .model_choice import choose_model, needs_model_choice
 from .search_page import SearchPage
 from .settings_page import SettingsPage
 from .theme import apply_theme
@@ -275,6 +277,9 @@ def run() -> None:
     app.setApplicationName("Zotero-RAG")
     apply_theme(app)
     app.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, True)
-    win = MainWindow(Services())
+    config = Config.load()
+    if needs_model_choice(config) and not choose_model(config):
+        return          # closed without choosing: asked again next time
+    win = MainWindow(Services(config))
     win.show()
     sys.exit(app.exec())

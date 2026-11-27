@@ -7,8 +7,10 @@ import numpy as np
 import pytest
 
 from src.config import CONFIG_VERSION, Config
-from src.embedding_models import (DEFAULT_MODEL, LEGACY_MODEL, MODEL_PROFILES,
-                                  profile_for)
+from src.embedding_models import (DEFAULT_MODEL, FIRST_RUN_MODELS, LEGACY_MODEL,
+                                  LIGHT_MODEL, MODEL_PROFILES, profile_for,
+                                  recommended_model)
+from src.ui.model_choice import needs_model_choice
 from src.vector_store import VectorStore
 
 pytestmark = pytest.mark.unit
@@ -118,3 +120,62 @@ def test_index_without_model_tag_counts_as_legacy(app_home):
 
     assert VectorStore(old).load()
     assert not VectorStore(Config()).load()
+
+
+# -- choosing the model at the first start ---------------------------------- #
+def test_light_model_profile():
+    light = profile_for(LIGHT_MODEL)
+    assert light.name == "Qwen/Qwen3-Embedding-0.6B" and light.dim == 1024
+    assert light.query_prefix == profile_for(DEFAULT_MODEL).query_prefix
+    assert light.left_padding and light.passage_prefix == ""
+    assert FIRST_RUN_MODELS == (DEFAULT_MODEL, LIGHT_MODEL)
+
+
+def test_recommendation_follows_memory():
+    assert recommended_model(8) == LIGHT_MODEL
+    assert recommended_model(16) == DEFAULT_MODEL
+    assert recommended_model(24) == DEFAULT_MODEL
+
+
+def test_new_install_is_asked_for_the_model(app_home):
+    config = Config.load()                      # no config.json yet
+    assert not config.model_chosen
+    assert needs_model_choice(config)
+
+
+def test_answer_is_remembered(app_home):
+    config = Config.load()
+    config.use_model(LIGHT_MODEL)
+    config.model_chosen = True
+    config.save()
+    again = Config.load()
+    assert not needs_model_choice(again)
+    assert (again.embedding_model, again.embedding_dim) == (LIGHT_MODEL, 1024)
+    assert again.similarity_threshold == MODEL_PROFILES[LIGHT_MODEL].default_threshold
+
+
+def test_install_from_before_the_question_is_not_asked(app_home):
+    Config.path().write_text(json.dumps({
+        "config_version": 2, "embedding_model": LEGACY_MODEL}), encoding="utf-8")
+    (app_home / "metadata.json").write_text(
+        json.dumps({"embedding_model": LEGACY_MODEL}), encoding="utf-8")
+    config = Config.load()
+    assert config.model_chosen and not needs_model_choice(config)
+    assert config.embedding_model == LEGACY_MODEL
+    assert json.loads(Config.path().read_text(encoding="utf-8"))["model_chosen"]
+
+
+def test_old_install_without_index_is_asked(app_home):
+    Config.path().write_text(json.dumps({
+        "config_version": 2, "embedding_model": DEFAULT_MODEL}), encoding="utf-8")
+    assert needs_model_choice(Config.load())
+
+
+def test_lost_settings_keep_the_model_of_the_index(app_home):
+    (app_home / "metadata.json").write_text(
+        json.dumps({"embedding_model": LIGHT_MODEL}), encoding="utf-8")
+    config = Config.load()                      # no config.json: defaults
+    assert not needs_model_choice(config)
+    again = Config.load()
+    assert again.model_chosen
+    assert (again.embedding_model, again.embedding_dim) == (LIGHT_MODEL, 1024)
